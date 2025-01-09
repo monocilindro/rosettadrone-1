@@ -66,21 +66,26 @@ import dji.sdk.sdkmanager.DJISDKInitEvent;
 import dji.sdk.sdkmanager.DJISDKManager;
 
 public class DummyProduct extends Aircraft {
-
-    private double homeLat = 60.4094000;
-    private double homeLng = 10.4910999;
+    private double homeLat = -32.8540743;
+    private double homeLng = -71.2153629;
 
     private double lat = homeLat;
     private double lng = homeLng;
-    private float alt = 10;
-    private double yaw = 90;
-    private boolean isFlying = true;
+
+    //private float alt = 30;
+    //private boolean isFlying = true;
+    private float alt = 0;
+    private boolean isFlying = false;
+
+    private double yaw = 0; // Deg
+    private long lastTime = 0;
 
     private static final String TAG = DummyProduct.class.getSimpleName();
+    private static DummyProduct instance = null;
 
-    public static void createInstance() {
-        Log.d(TAG, "createInstance dummyProduct");
-        BaseProduct dummyProduct = new DummyProduct(new DJISDKManager.SDKManagerCallback() {
+    public static BaseProduct getProductInstance() {
+        if(instance == null) {
+            instance = new DummyProduct(new DJISDKManager.SDKManagerCallback() {
 
             @Override
             public void onRegister(DJIError djiError) {
@@ -117,7 +122,8 @@ public class DummyProduct extends Aircraft {
 
             }
         });
-        RDApplication.updateProduct(dummyProduct);
+        }
+        return (BaseProduct)instance;
     }
 
     private class DummyBattery extends Battery {
@@ -576,7 +582,8 @@ public class DummyProduct extends Aircraft {
 
         @Override
         public void startTakeoff(@Nullable CommonCallbacks.CompletionCallback completionCallback) {
-
+            isFlying = true;
+            completionCallback.onResult(null);
         }
 
         @Override
@@ -591,7 +598,10 @@ public class DummyProduct extends Aircraft {
 
         @Override
         public void startLanding(@Nullable CommonCallbacks.CompletionCallback completionCallback) {
-
+            // HACK: Teletransporting to ground
+            alt = 0;
+            isFlying = false;
+            completionCallback.onResult(null);
         }
 
         @Override
@@ -676,7 +686,13 @@ public class DummyProduct extends Aircraft {
 
         @Override
         public void sendVirtualStickFlightControlData(@NonNull FlightControlData flightControlData, @Nullable CommonCallbacks.CompletionCallback completionCallback) {
-            final double dT = DroneModel.MOTION_PERIOD_MS / 1000.0;
+            long time = System.currentTimeMillis();
+            double dt = (time - lastTime) / 1000.0;
+            lastTime = time;
+            if(dt > 0.1) { // TODO: Check DJI doc
+                // Timed out => ignore
+                return;
+            }
 
             double fwdVel = flightControlData.getRoll();
             double rightVel = flightControlData.getPitch();
@@ -686,11 +702,17 @@ public class DummyProduct extends Aircraft {
             double rad = Math.toRadians(yaw);
             double[] dLatLng = Functions.getLatLngDiff(lat, rad, fwdVel, rightVel);
 
+            // Virtual stick movements are not in m/s
+            // TODO: Adjust to match real drone motion
+            double f1 = 0.5;
+            double f2 = 0.5;
+            double f3 = 0.5;
+
             synchronized (this) { // Consistency
-                lat += dLatLng[0] * dT;
-                lng += dLatLng[1] * dT;
-                yaw += yawVel * dT;
-                alt += throttleVel * dT;
+                lat += dLatLng[0] * dt * f1;
+                lng += dLatLng[1] * dt * f1;
+                alt += throttleVel * dt * f2;
+                yaw += yawVel * dt * f3;
 
                 if (yaw > 180) {
                     yaw -= 360;

@@ -99,13 +99,6 @@ import static com.MAVLink.enums.MAV_PROTOCOL_CAPABILITY.MAV_PROTOCOL_CAPABILITY_
 import static com.google.android.material.snackbar.BaseTransientBottomBar.LENGTH_LONG;
 
 public class MAVLinkReceiver {
-
-    public int AIactivityPort = 7001;
-    public String AIactivityIP = "127.0.0.1";
-
-    public boolean AIenabled = false;
-    public boolean AIstat = false;
-
     private final String TAG = this.getClass().getSimpleName();
 
     private final float m_autoFlightSpeed = 2.0f;
@@ -120,11 +113,8 @@ public class MAVLinkReceiver {
     private int mNumGCSWaypoints = 0; // Expected number of mission items
     private MainActivity parent;
     private WaypointMission.Builder mBuilder;
-    private ArrayList<msg_mission_item_int> mMissionItemList; // MAV Mission Item List
+    public ArrayList<msg_mission_item_int> mMissionItemList; // MAV Mission Item List
     private boolean isHome = true;
-
-    //    private ArrayList<String> aiWP = new ArrayList<String>();
-    private String[] aiWP = new String[100]; // Max 100 wp in an AI mission for now...
 
     public List<MAVLinkConnection> mavLinkConnections = new ArrayList<MAVLinkConnection>();
 
@@ -154,7 +144,7 @@ public class MAVLinkReceiver {
             return;
         }
 
-        Log.d(TAG, "Received Cmd: " + msg.toString());
+        //Log.d(TAG, "Received Cmd: " + msg.toString());
 
         switch (msg.msgid) {
             case MAVLINK_MSG_ID_AUTOPILOT_VERSION_REQUEST:
@@ -183,7 +173,8 @@ public class MAVLinkReceiver {
             case MAVLINK_MSG_ID_COMMAND_LONG:
                 msg_command_long msg_cmd = (msg_command_long) msg;
 
-                if (mModel.getSystemId() != msg_cmd.target_system) {
+                // A value of 0 means that the command should be executed by any available system
+                if (msg_cmd.target_system != 0 && msg_cmd.target_system != mModel.getSystemId()) {
                     return;
                 }
 
@@ -196,9 +187,10 @@ public class MAVLinkReceiver {
                     case MAV_CMD_COMPONENT_ARM_DISARM:
                         if (msg_cmd.param1 == 1)
                             sendResponse(MAV_CMD_COMPONENT_ARM_DISARM, mModel.armMotors());
-                        else
+                        else {
                             sendResponse(MAV_CMD_COMPONENT_ARM_DISARM);
                             mModel.disarmMotors(true);
+                        }
                         break;
 
                     case MAV_CMD_DO_SET_MODE:
@@ -226,9 +218,11 @@ public class MAVLinkReceiver {
                         break;
 
                     case MAV_CMD_NAV_RETURN_TO_LAUNCH:
+                        // MAVSDK uses MAVLINK_MSG_ID_SET_MODE instead
                         Log.d(TAG, "MAV_CMD_NAV_RETURN_TO_LAUNCH...");
                         sendResponse(MAV_CMD_NAV_RETURN_TO_LAUNCH);
-                        mModel.doGomeHome();
+                        //mModel.doGomeHome();
+                        mModel.doReturnToLaunch();
                         break;
 
                     case MAV_CMD_GET_HOME_POSITION:
@@ -293,7 +287,7 @@ public class MAVLinkReceiver {
                             mModel.send_command_ack(MAV_CMD_CONDITION_YAW, MAV_RESULT.MAV_RESULT_UNSUPPORTED);
                         }
                         break;
-
+                    // TODO: Implement MAV_CMD_DO_GIMBAL_MANAGER_PITCHYAW
                     case MAV_CMD_DO_SET_SERVO:
                         mModel.doSetGimbal(msg_cmd.param1, msg_cmd.param2);
                         break;
@@ -351,8 +345,8 @@ public class MAVLinkReceiver {
                 msg_set_position_target_local_ned msg_param = (msg_set_position_target_local_ned) msg;
                 DroneModel.Motion motion = mModel.newMotion(MAVLINK_MSG_ID_SET_POSITION_TARGET_LOCAL_NED, msg_param.type_mask);
                 motion.setDestination(msg_param.coordinate_frame, msg_param.x, msg_param.y, msg_param.z);
-                motion.yaw = msg_param.yaw;
-                motion.yawRate = msg_param.yaw_rate;
+                motion.yaw = Math.toDegrees(msg_param.yaw);
+                motion.yawRate = Math.toDegrees(msg_param.yaw_rate);
                 motion.vx = msg_param.vx;
                 motion.vy = msg_param.vy;
                 motion.vz = msg_param.vz;
@@ -368,12 +362,14 @@ public class MAVLinkReceiver {
             case MAVLINK_MSG_ID_MANUAL_CONTROL:
                 msg_manual_control msg_param_5 = (msg_manual_control) msg;
 
-                mModel.setVelocities(
-                        msg_param_5.x / 100.0,
-                        msg_param_5.y / 100.0,
-                        msg_param_5.z / 260.0,
-                        msg_param_5.r / 50.0
-                        );
+                double roll = msg_param_5.x / 500.0;
+                double pitch = msg_param_5.y / 500.0;
+                double throttle = (msg_param_5.z - 500) / 260.0;
+                double yaw = msg_param_5.r / 50.0;
+
+                if(roll != 0 || pitch != 0 || throttle != 0 || yaw != 0) { // Prevent cancelling other motion
+                    mModel.setVelocities(roll, pitch, throttle, yaw);
+                }
 
                 mModel.send_command_ack(MAVLINK_MSG_ID_MANUAL_CONTROL, MAV_RESULT.MAV_RESULT_ACCEPTED);
                 break;
@@ -387,13 +383,13 @@ public class MAVLinkReceiver {
                 break;
 
             case MAVLINK_MSG_ID_PARAM_REQUEST_READ:
-                int i = mModel.getParameterIndex(((msg_param_request_read) msg).getParam_Id());
-                if(i != -1) {
-                    mModel.send_param(i);
+                msg_param_request_read paramRequestReadMsg = (msg_param_request_read) msg;
+                int i = mModel.getParameterIndex(paramRequestReadMsg.getParam_Id());
+                if(i == -1) {
+                    // TODO: Check
+                    mModel.send_param(paramRequestReadMsg.name(), 0, (short)0, 0, paramRequestReadMsg.param_index);
                 } else {
-                    Log.d(TAG, "Request to read param that doesn't exist");
-                    // NOT_TESTED:
-                    mModel.send_command_ack(MAVLINK_MSG_ID_PARAM_REQUEST_READ, MAV_RESULT.MAV_RESULT_DENIED);
+                    mModel.send_param(i);
                 }
                 break;
 
@@ -551,7 +547,7 @@ public class MAVLinkReceiver {
         } else {
             motion.setDestination(msg.coordinate_frame, msg.lat_int, msg.lon_int, msg.alt);
             motion.yaw = msg.yaw;
-            motion.yawRate = msg.yaw_rate;
+            motion.yawRate = Math.toDegrees(msg.yaw_rate);
         }
         mModel.startMotion(motion);
     }
@@ -613,7 +609,8 @@ public class MAVLinkReceiver {
 
         } else if (flightMode == ArduCopterFlightModes.RTL) {
             mModel.cancelAllTasks();
-            mModel.doGomeHome();
+            //mModel.doGomeHome();
+            mModel.doReturnToLaunch();
 
         } else if (flightMode == ArduCopterFlightModes.LAND) {
             mModel.cancelAllTasks();
@@ -656,74 +653,12 @@ public class MAVLinkReceiver {
         boolean triggerDistanceEnabled = false;
         float triggerDistance = 0;
 
-        // If we got our position...
-//        if(mModel.get_current_lat()+mModel.get_current_lon()+mModel.get_current_alt() > 0) {
-//            currentWP = new Waypoint(mModel.get_current_lat(), mModel.get_current_lon(), mModel.get_current_alt());
-//        }
-
         if(mModel.useMissionManager) {
             mModel.missionManager.setMission(mMissionItemList);
             parent.logMessageDJI("Mission uploaded and ready to execute (using VirtualSticks)");
             mModel.send_mission_ack(MAV_MISSION_RESULT.MAV_MISSION_ACCEPTED);
             return;
 
-        } else if (AIstat == true) {
-            // TODO: Move code to AIClass
-//            aiWP = "";
-            int num = 0;
-
-            for (msg_mission_item_int m : this.mMissionItemList) {
-                Log.d(TAG, "AI Command: " + String.valueOf(m));
-
-                switch (m.command) {
-                    case MAV_CMD.MAV_CMD_NAV_WAYPOINT:
-
-                        if(num ==0)
-                            mModel.mission_alt = m.z;
-
-                        aiWP[num++] = "WP," +
-                                String.valueOf(num) + "," +
-                                String.valueOf(m.x / 10000000.0) + "," +
-                                String.valueOf(m.y / 10000000.0) + "," +
-                                String.valueOf(m.z-mModel.mission_alt) + "";
-                        break;
-                }
-            }
-
-            // Send mission to the AIactivityModule
-//            Log.d(TAG, aiWP);
-
-            if(num > 0){
-                aiWP[num++] = "WP,9999,0,0,0";  // End of mission...
-
-                try {
-                    InetAddress address = InetAddress.getByName(AIactivityIP);
-
-                    try {
-                        DatagramSocket mSocketUDP = new DatagramSocket();
-
-                        for(int x=0; x < num; x++){
-
-                            byte[] byteArrray = aiWP[x].getBytes();
-                            DatagramPacket p = new DatagramPacket(byteArrray, byteArrray.length, address, AIactivityPort);
-                            try {
-                                mSocketUDP.send(p);
-                                //                 mSocketUDP.close();  // It this needed / wanted...
-                            } catch (IOException e) {
-                                Log.e(TAG, "Error sending AI datagram socket", e);
-                            }
-                            aiWP[x]="";
-                        }
-                    } catch (SocketException e) {
-                        Log.e(TAG, "Error creating AI datagram socket", e);
-                    }
-                } catch (UnknownHostException e) {
-                    Log.e(TAG, "Error setting address to AI datagram socket", e);
-                }
-            }
-            stopUpload = true;
-
-            NotificationHandler.notifySnackbar(parent.findViewById(R.id.snack),R.string.ai_uploaded_active, LENGTH_LONG);
         } else {
             waypoint_loop:
             for (msg_mission_item_int m : this.mMissionItemList) {
@@ -1080,6 +1015,6 @@ public class MAVLinkReceiver {
         double lat2 = wp2.coordinate.getLatitude();
         float el2 =  0; //wp2.altitude;
 
-        return mModel.getRangeBetweenWaypoints_m(lat1,lon1,el1,lat2,lon2,el2);
+        return mModel.getMetersBetweenWaypoints(lat1,lon1,el1,lat2,lon2,el2);
     }
 }

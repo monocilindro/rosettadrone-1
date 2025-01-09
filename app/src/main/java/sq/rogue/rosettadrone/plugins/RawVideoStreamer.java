@@ -11,6 +11,7 @@
 package sq.rogue.rosettadrone.plugins;
 
 import android.media.MediaFormat;
+import android.util.Log;
 
 import java.io.IOException;
 import java.io.OutputStream;
@@ -18,20 +19,21 @@ import java.net.Socket;
 import java.net.SocketException;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
-import java.nio.charset.Charset;
 
 import dji.sdk.codec.DJICodecManager;
 import sq.rogue.rosettadrone.Plugin;
 import sq.rogue.rosettadrone.PluginManager;
+import sq.rogue.rosettadrone.RDApplication;
 
 public class RawVideoStreamer extends Plugin implements DJICodecManager.YuvDataCallback {
-    PluginManager pluginManager;
-    private final int fps = 30;
+    private static final boolean TEST = false; // Send a testing stream
+
+    private final int fps = 15; // Must be a divisor of 30 (eg. 1, 3, 5, 6, 10, 15, 30)
     Socket socket;
     OutputStream outputStream;
+    TestSender testSender;
 
-    public void init(PluginManager pluginManager) {
-        this.pluginManager = pluginManager;
+    public void start() {
         pluginManager.mainActivity.useCustomDecoder = false; // Messes up the buffer received by onYuvDataReceived()
         pluginManager.mainActivity.useOutputSurface = false; // Avoid crash when clicking on minimap
     }
@@ -41,28 +43,40 @@ public class RawVideoStreamer extends Plugin implements DJICodecManager.YuvDataC
             socket = new Socket("localhost", 6000);
             outputStream = socket.getOutputStream();
         } catch (IOException e) {
-            e.printStackTrace();
+            //e.printStackTrace();
         }
     }
 
-    public static void test() {
-        android.os.AsyncTask.execute(new Runnable() {
-            @Override
-            public void run() {
-                try {
-                    RawVideoStreamer streamer = new RawVideoStreamer();
-                    streamer.connect();
+    public class TestSender extends Thread {
+        public RawVideoStreamer streamer;
+        public boolean stop = false;
 
-                    String msg = "This is just a simple test, but here goes the buffer data";
-                    Charset charset = Charset.forName("UTF-8");
-                    ByteBuffer buffer = charset.encode(msg);
-                    streamer.sendYuvData(null, buffer, msg.length(), 10, 10);
+        @Override
+        public void run() {
+            int offset = 0;
+            while (!stop) {
+                try {
+                    int w = 1280;
+                    int h = 720;
+
+                    int bufferSize = w * h * 3 / 2;
+                    byte[] bytes = new byte[bufferSize];
+
+                    for (int i = 0; i < bytes.length; i++) {
+                        bytes[i] = (byte) ((i + offset) % 256);
+                    }
+                    offset++;
+
+                    ByteBuffer buffer = ByteBuffer.wrap(bytes);
+                    streamer.sendYuvData(null, buffer, bufferSize, w, h);
+
+                    Thread.sleep(1000 / fps);
 
                 } catch (Exception e) {
                     e.printStackTrace();
                 }
             }
-        });
+        }
     }
 
     private void sendInt(int val) throws IOException {
@@ -73,7 +87,22 @@ public class RawVideoStreamer extends Plugin implements DJICodecManager.YuvDataC
         outputStream.write(result);
     }
 
-    public void sendYuvData(MediaFormat outputFormat, ByteBuffer yuvDataBuf, int size, int width, int height) {
+    private void sendLong(long val) throws IOException {
+        ByteBuffer byteBuffer = ByteBuffer.allocate(8);
+        byteBuffer.order(ByteOrder.LITTLE_ENDIAN);
+        byteBuffer.putLong(val);
+        byte[] result = byteBuffer.array();
+        outputStream.write(result);
+    }
+
+    private void sendFloat(float val) throws IOException {
+        ByteBuffer byteBuffer = ByteBuffer.allocate(4);
+        byteBuffer.order(ByteOrder.LITTLE_ENDIAN);
+        byte[] bytes = byteBuffer.putFloat(val).array();
+        outputStream.write(bytes);
+    }
+
+    public synchronized void sendYuvData(MediaFormat outputFormat, ByteBuffer yuvDataBuf, int size, int width, int height) {
         try {
             final byte[] bytes = new byte[size];
             yuvDataBuf.get(bytes);
@@ -81,6 +110,8 @@ public class RawVideoStreamer extends Plugin implements DJICodecManager.YuvDataC
             if(outputStream != null) {
                 sendInt(width);
                 sendInt(height);
+                sendLong(System.nanoTime());
+                sendFloat((float)pluginManager.mainActivity.mModel.getCurrentYaw());
                 sendInt(size);
                 outputStream.write(bytes);
                 outputStream.flush();
@@ -103,8 +134,29 @@ public class RawVideoStreamer extends Plugin implements DJICodecManager.YuvDataC
     }
 
     public void onVideoChange() {
-        pluginManager.mainActivity.mCodecManager.enabledYuvData(true);
-        pluginManager.mainActivity.mCodecManager.setYuvDataCallback(this);
+        if(TEST || RDApplication.isTestMode) {
+            testSender = new TestSender();
+            testSender.streamer = this;
+            testSender.start();
+        } else {
+            pluginManager.mainActivity.mCodecManager.enabledYuvData(true);
+            pluginManager.mainActivity.mCodecManager.setYuvDataCallback(this);
+        }
+    }
+
+    public void stop() {
+        if(TEST || RDApplication.isTestMode) {
+            testSender.stop = true;
+        } else {
+            pluginManager.mainActivity.mCodecManager.enabledYuvData(false);
+        }
+
+        if(socket != null) {
+            try {
+                socket.close();
+            } catch (IOException e) {
+            }
+        }
     }
 
     public boolean isEnabled() {

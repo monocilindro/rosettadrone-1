@@ -101,6 +101,10 @@
     <string name="pref_telemetry_3_host">Host 3</string>
     <string name="pref_telemetry_3_port">Port 3</string>
 
+    <string name="pref_telemetry_4_enabled">Enable Telemetry 4</string>
+    <string name="pref_telemetry_4_host">Host 4</string>
+    <string name="pref_telemetry_4_port">Port 4</string>
+
     <string name="pref_video_ip">Video IP address</string>
     <string name="pref_video_port">Video port</string>
     <string name="pref_video_bitrate">Video bitrate</string>
@@ -138,6 +142,12 @@
     <!-- Logs -->
     <string name="pref_log_messages">Log MAVLink messages</string>
 
+    <!-- WebRTC -->
+    <string name="webrtc_settings">WebRTC Video</string>
+    <string name="pref_enable_webrtc">Enable WebRTC video streaming</string>
+    <string name="pref_webrtc_signaling_address">Signaling server address</string>
+    <string name="pref_webrtc_stun_address">STUN server address</string>
+
     <!-- Communication Channels -->
     <string name="dji">DJI</string>
     <string name="gcs">GCS</string>
@@ -151,7 +161,6 @@
     <string name="ai_not_active">AI not activated in setup menu!</string>
     <string name="ai_uploaded_active">AI mission sent to AI module!</string>
     <string name="release">Report Sent!</string>
-
 
     <!-- Preference Menus -->
     <string name="settings">Settings</string>
@@ -168,8 +177,8 @@
     <string name="options_clear_log">Clear Logs</string>
     <string name="options_download_log">Download Logs</string>
     <string name="options_help">Help &amp; feedback</string>
-    <string name="options_map">Waypoint v1</string>
-    <string name="options_map_new">Waypoint v2</string>
+    <string name="options_map">Waypoints (old)</string>
+    <string name="options_map_new">Waypoints</string>
     <string name="options_gui">Switch Logging</string>
 
     <!-- Error Messages -->

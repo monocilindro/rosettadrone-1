@@ -253,6 +253,23 @@
             android:key="pref_telemetry_3_port"
             android:title="@string/pref_telemetry_3_port" />
 
+        <androidx.preference.SwitchPreferenceCompat
+            android:defaultValue="false"
+            android:key="pref_telemetry_4_enabled"
+            android:title="@string/pref_telemetry_4_enabled" />
+        <androidx.preference.EditTextPreference
+            android:defaultValue=""
+            android:dependency="pref_telemetry_4_enabled"
+            android:digits="0123456789."
+            android:inputType="number"
+            android:key="pref_telemetry_4_host"
+            android:title="@string/pref_telemetry_4_host" />
+        <androidx.preference.EditTextPreference
+            android:defaultValue=""
+            android:dependency="pref_telemetry_4_enabled"
+            android:key="pref_telemetry_4_port"
+            android:title="@string/pref_telemetry_4_port" />
+
     </PreferenceCategory>
 
     <PreferenceCategory
@@ -299,6 +316,28 @@
             android:entries="@array/video_encode_array"
             android:entryValues="@array/video_encode_values_array"
             android:defaultValue="2" />
+
+    </PreferenceCategory>
+
+    <PreferenceCategory
+        android:key="webrtc_prefs"
+        android:title="@string/webrtc_settings">
+
+        <androidx.preference.SwitchPreferenceCompat
+            android:key="pref_enable_webrtc"
+            android:title="@string/pref_enable_webrtc"
+            android:defaultValue="false" />
+
+        <androidx.preference.EditTextPreference
+            android:defaultValue="ws://127.0.0.1:8090"
+            android:dependency="pref_enable_webrtc"
+            android:key="pref_webrtc_signaling_server"
+            android:title="@string/pref_webrtc_signaling_address" />
+        <androidx.preference.EditTextPreference
+            android:defaultValue="stun:stun.l.google.com:19302"
+            android:dependency="pref_enable_webrtc"
+            android:key="pref_webrtc_stun_server"
+            android:title="@string/pref_webrtc_stun_address" />
 
     </PreferenceCategory>
 

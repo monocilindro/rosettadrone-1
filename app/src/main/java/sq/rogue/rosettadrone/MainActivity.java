@@ -12,6 +12,7 @@ import android.content.pm.PackageManager;
 import android.content.res.AssetManager;
 import android.graphics.Bitmap;
 import android.graphics.Color;
+import android.graphics.Matrix;
 import android.graphics.SurfaceTexture;
 import android.graphics.drawable.BitmapDrawable;
 import android.graphics.drawable.Drawable;
@@ -19,15 +20,13 @@ import android.hardware.usb.UsbManager;
 import android.location.Location;
 import android.location.LocationListener;
 import android.location.LocationManager;
-import android.media.Ringtone;
-import android.media.RingtoneManager;
-import android.net.Uri;
 import android.os.AsyncTask;
 import android.os.Bundle;
 import android.os.Environment;
 import android.os.Handler;
 import android.os.IBinder;
 import android.os.Looper;
+import android.text.format.DateFormat;
 import android.util.Log;
 import android.util.TypedValue;
 import android.view.MenuInflater;
@@ -75,6 +74,7 @@ import java.net.DatagramSocket;
 import java.net.PortUnreachableException;
 import java.net.SocketTimeoutException;
 import java.util.ArrayList;
+import java.util.Date;
 import java.util.List;
 import java.util.Objects;
 import java.util.Timer;
@@ -119,13 +119,19 @@ import static sq.rogue.rosettadrone.util.safeSleep;
 
 //public class MainActivity extends AppCompatActivity implements OnMapReadyCallback, GoogleMap.OnMapClickListener {
 public class MainActivity extends AppCompatActivity implements OnMapReadyCallback {
-
-    //    public static final String FLAG_CONNECTION_CHANGE = "dji_sdk_connection_change";
     private final static int RESULT_SETTINGS = 1001;
     private final static int RESULT_HELP = 1002;
-    private static int compare_height = 0;
+
+    private enum FocusedView {
+        VideoFeed,
+        Map,
+    }
+    private static FocusedView focusedView = FocusedView.VideoFeed;
 
     public static boolean FLAG_PREFS_CHANGED = false;
+    public static List<String> changedSettings = new ArrayList<String>();
+
+    // TODO: DEPRECATE: Use changedSettings
     public static boolean FLAG_VIDEO_ADDRESS_CHANGED = false;
     public static boolean FLAG_TELEMETRY_ADDRESS_CHANGED = false;
     public static boolean FLAG_DRONE_ID_CHANGED = false;
@@ -141,9 +147,6 @@ public class MainActivity extends AppCompatActivity implements OnMapReadyCallbac
     public static boolean FLAG_APP_NAME_CHANGED = false;
     public static boolean FLAG_APP_REPORT_EMAIL = false;
     public static boolean FLAG_MAPS_CHANGED = false;
-    public static boolean FLAG_DRONE_AI_IP_CHANGED = false;
-    public static boolean FLAG_DRONE_AI_PORT_CHANGED = false;
-    public static boolean FLAG_DRONE_AI_ENABLED_CHANGED = false;
 
     private GoogleMap aMap;
     private double droneLocationLat, droneLocationLng;
@@ -193,14 +196,12 @@ public class MainActivity extends AppCompatActivity implements OnMapReadyCallbac
     private VideoService videoService = null;
     private boolean mIsBound;
     private int m_videoMode = 1;
+    private int mPrevVideoBufferSize = 0;
 
     private VideoFeeder.VideoFeed standardVideoFeeder;
     protected VideoFeeder.VideoDataListener mReceivedVideoDataListener;
     private TextureView videostreamPreviewTtView;
-    private TextureView videostreamPreviewTtViewSmall;
     public DJICodecManager mCodecManager;
-    private int videoViewWidth;
-    private int videoViewHeight;
     private boolean mIsTranscodedVideoFeedNeeded = false;
 
     private int mMaptype = GoogleMap.MAP_TYPE_HYBRID;
@@ -219,6 +220,10 @@ public class MainActivity extends AppCompatActivity implements OnMapReadyCallbac
     public int lastDownloadedIndex = -1;
 
     public PluginManager pluginManager = new PluginManager(this);
+
+    public static boolean changedSetting(String settingId) {
+        return changedSettings.indexOf(settingId) != -1;
+    }
 
     private Runnable djiUpdateRunnable = () -> {
         Intent intent = new Intent(DJISimulatorApplication.FLAG_CONNECTION_CHANGE);
@@ -300,8 +305,8 @@ public class MainActivity extends AppCompatActivity implements OnMapReadyCallbac
         Intent intent = new Intent(this, VideoService.class);
 
         // BUG: "Not allowed to start service Intent" "app is in background"
-        // this.startService(intent);
-        this.startForegroundService(intent);
+        this.startService(intent);
+        //this.startForegroundService(intent); // For API level 26
 
         safeSleep(500);
 
@@ -371,6 +376,7 @@ public class MainActivity extends AppCompatActivity implements OnMapReadyCallbac
         */
 
         resumeVideo();
+        pluginManager.resume();
     }
 
     void resumeVideo() {
@@ -424,6 +430,7 @@ public class MainActivity extends AppCompatActivity implements OnMapReadyCallbac
     protected void onPause() {
         Log.e(TAG, "onPause()");
         super.onPause();
+        pluginManager.pause();
     }
 
     @Override
@@ -461,6 +468,8 @@ public class MainActivity extends AppCompatActivity implements OnMapReadyCallbac
             mIsBound = false;
         }
 
+        pluginManager.stop();
+
         //Intent intent = getIntent();
         finish();
         super.onDestroy();
@@ -487,50 +496,6 @@ public class MainActivity extends AppCompatActivity implements OnMapReadyCallbac
         aMap.setMapType(mMaptype);
         LatLng marker = new LatLng(m_host_lat, m_host_lon);
         aMap.moveCamera(CameraUpdateFactory.newLatLngZoom(marker, 14F));
-
-        aMap.setOnMapClickListener((point)-> {
-            Log.d(TAG, "Goto: " + point.toString());
-
-            AlertDialog.Builder alertDialog2 = new AlertDialog.Builder(this);
-            alertDialog2.setIcon(R.mipmap.track_right);
-            alertDialog2.setTitle("AI Mavlink/Python function selector!");
-            alertDialog2.setMessage("Clicked");
-            alertDialog2.setNegativeButton("Cancel",
-                    (dialog, which) -> {
-                        dialog.cancel();
-                    });
-            alertDialog2.setNeutralButton("Add to Waypoint list",
-                    (dialog, which) -> {
-                        markWaypoint(point, true);
-                        Waypoint mWaypoint = new Waypoint(point.latitude, point.longitude, mModel.m_alt);
-                        //Add Waypoints to Waypoint arraylist;
-                        if (waypointMissionBuilder != null) {
-                            waypointList.add(mWaypoint);
-                            waypointMissionBuilder.waypointList(waypointList).waypointCount(waypointList.size());
-                        } else {
-                            waypointMissionBuilder = new WaypointMission.Builder();
-                            waypointList.add(mWaypoint);
-                            waypointMissionBuilder.waypointList(waypointList).waypointCount(waypointList.size());
-                        }
-                        dialog.cancel();
-                    });
-            alertDialog2.setPositiveButton("Accept",
-                    (dialog, which) -> {
-                        // If we are airborn...
-                        if (mModel.m_alt > -5.0) {
-                            markWaypoint(point, false);
-                            mModel.flyTo(point.latitude, point.longitude, mModel.m_alt);
-                            dialog.cancel();
-                        } else {
-                            Log.d(TAG, "Can't Add Waypoint");
-                            Toast.makeText(getApplicationContext(), "Can't goto position!", Toast.LENGTH_LONG).show();
-                        }
-                    });
-            ///
-            this.runOnUiThread(() -> {
-                alertDialog2.show();
-            });
-        });
 
         updateDroneLocation();
     }
@@ -577,11 +542,18 @@ public class MainActivity extends AppCompatActivity implements OnMapReadyCallbac
                 BitmapDrawable bitmapdraw = (BitmapDrawable)getResources().getDrawable(R.drawable.pilot, null);
                 Bitmap smallMarker;
 
-                if (compare_height == 0) {
-                    smallMarker = Bitmap.createScaledBitmap(bitmapdraw.getBitmap(), 32, 32, false);
-                }else{
-                    smallMarker = Bitmap.createScaledBitmap(bitmapdraw.getBitmap(), 64, 64, false);
+                switch (focusedView) {
+                    case Map: {
+                        smallMarker = Bitmap.createScaledBitmap(bitmapdraw.getBitmap(), 64, 64, false);
+                        break;
+                    }
+                    case VideoFeed:
+                    default: {
+                        smallMarker = Bitmap.createScaledBitmap(bitmapdraw.getBitmap(), 32, 32, false);
+                        break;
+                    }
                 }
+
                 GCS_markerOptions.icon(BitmapDescriptorFactory.fromBitmap(smallMarker));
 
                 runOnUiThread(() -> {
@@ -611,10 +583,16 @@ public class MainActivity extends AppCompatActivity implements OnMapReadyCallbac
             BitmapDrawable bitmapdraw = (BitmapDrawable)getResources().getDrawable(R.drawable.drone_img, null);
             Bitmap smallMarker;
 
-            if (compare_height == 0) {
-                smallMarker = Bitmap.createScaledBitmap(bitmapdraw.getBitmap(), 32, 32, false);
-            }else{
-                smallMarker = Bitmap.createScaledBitmap(bitmapdraw.getBitmap(), 64, 64, false);
+            switch (focusedView) {
+                case Map: {
+                    smallMarker = Bitmap.createScaledBitmap(bitmapdraw.getBitmap(), 64, 64, false);
+                    break;
+                }
+                case VideoFeed:
+                default: {
+                    smallMarker = Bitmap.createScaledBitmap(bitmapdraw.getBitmap(), 32, 32, false);
+                    break;
+                }
             }
             markerOptions.icon(BitmapDescriptorFactory.fromBitmap(smallMarker));
 
@@ -668,7 +646,7 @@ public class MainActivity extends AppCompatActivity implements OnMapReadyCallbac
         public void onStatusChanged(String provider, int status, Bundle extras) {}
     }
 
-    private void initFlightController() {
+    private void requestDroneLocation() {
         if (mModel.mFlightController != null) {
             mModel.mFlightController.setStateCallback(djiFlightControllerCurrentState -> {
                 LocationCoordinate3D loc = djiFlightControllerCurrentState.getAircraftLocation();
@@ -691,15 +669,16 @@ public class MainActivity extends AppCompatActivity implements OnMapReadyCallbac
         return (latitude > -90 && latitude < 90 && longitude > -180 && longitude < 180) && (latitude != 0f && longitude != 0f);
     }
 
+    public static BaseProduct createDummyProduct() {
+        return DummyProduct.getProductInstance();
+    }
+
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         Log.e(TAG, "onCreate()");
         super.onCreate(savedInstanceState);
 
-        if(RDApplication.isTestMode) {
-            Log.e(TAG, "(RDApplication.isTestMode");
-            DummyProduct.createInstance();
-        }
+        mProduct = RDApplication.getProductOrDummy();
 
         // Hide top bar
         Objects.requireNonNull(getSupportActionBar()).hide();
@@ -711,8 +690,12 @@ public class MainActivity extends AppCompatActivity implements OnMapReadyCallbac
         //requestWindowFeature(Window.FEATURE_NO_TITLE); // for hiding title
 
         // Make fullscreen
-        //getWindow().setFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN,
-        //WindowManager.LayoutParams.FLAG_FULLSCREEN);
+        getWindow().getDecorView().setSystemUiVisibility(View.SYSTEM_UI_FLAG_FULLSCREEN
+                | View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
+                | View.SYSTEM_UI_FLAG_LAYOUT_STABLE
+                | View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
+                | View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
+                | View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY);
 
         setContentView(R.layout.activity_gui);
 
@@ -721,7 +704,8 @@ public class MainActivity extends AppCompatActivity implements OnMapReadyCallbac
         prefs = PreferenceManager.getDefaultSharedPreferences(MainActivity.this);
         sharedPreferences = PreferenceManager.getDefaultSharedPreferences(this);
 
-        mProduct = RDApplication.getProductInstance(); // Should be set by Connection ...
+        mProduct = RDApplication.getProductOrDummy();
+
         if (mProduct != null) {
             try {
                 mProductModel = mProduct.getModel();
@@ -751,11 +735,17 @@ public class MainActivity extends AppCompatActivity implements OnMapReadyCallbac
         }
 
         mModel = new DroneModel(this, null, RDApplication.getSim());
+        if(mModel.mFlightController == null) {
+            // We should never have a MainActivity with a DroneModel without a FlightController since it may crash everywhere.
+            // TODO: DOC: How does this happen? Maybe when running the DJI FlyApp in background?
+            Log.e(TAG, "Tried to create MainActivity without a FlightController!");
+            finish();
+            return;
+        }
+
         mModel.setSystemId(Integer.parseInt(Objects.requireNonNull(prefs.getString("pref_drone_id", "1"))));
 
         mMavlinkReceiver = new MAVLinkReceiver(this, mModel);
-
-        pluginManager.init();
 
         loadMockParamFile();
 
@@ -776,8 +766,6 @@ public class MainActivity extends AppCompatActivity implements OnMapReadyCallbac
         }
 
         videostreamPreviewTtView = findViewById(R.id.livestream_preview_ttv);
-        videostreamPreviewTtViewSmall = findViewById(R.id.livestream_preview_ttv_small);
-        videostreamPreviewTtView.setVisibility(View.VISIBLE);
 
         deleteApplicationDirectory();
         initLogs();
@@ -787,25 +775,15 @@ public class MainActivity extends AppCompatActivity implements OnMapReadyCallbac
         SupportMapFragment mapFragment = (SupportMapFragment) getSupportFragmentManager().findFragmentById(R.id.map);
         mapFragment.getMapAsync(this);
 
-        initFlightController();
+        requestDroneLocation();
 
         DJISDKManager.getInstance().registerApp(this, mDJISDKManagerCallback);
 
         // SafeMode button
         mBtnSafety = findViewById(R.id.btn_safety);
         mBtnSafety.setOnClickListener(v -> {
-            Drawable connectedDrawable;
             stat = !stat;
-            if (stat) {
-                connectedDrawable = getResources().getDrawable(R.drawable.ic_lock_outline_secondary_24dp, null);
-                mBtnSafety.setBackground(connectedDrawable);
-                findViewById(R.id.btn_takeoff).setVisibility(View.INVISIBLE);
-            } else {
-                connectedDrawable = getResources().getDrawable(R.drawable.ic_lock_open_black_24dp, null);
-                mBtnSafety.setBackground(connectedDrawable);
-                findViewById(R.id.btn_takeoff).setVisibility(View.VISIBLE);
-            }
-            mModel.setSafetyEnabled(stat);
+            setSafeMode(stat);
             NotificationHandler.notifySnackbar(findViewById(R.id.snack),
                     (mModel.isSafetyEnabled()) ? R.string.safety_on : R.string.safety_off, LENGTH_LONG);
         });
@@ -816,39 +794,35 @@ public class MainActivity extends AppCompatActivity implements OnMapReadyCallbac
 
         // RTH button
         Button mBtnRTH = findViewById(R.id.btn_rth);
-        mBtnRTH.setOnClickListener(v -> mModel.doGomeHome());
+        //mBtnRTH.setOnClickListener(v -> mModel.doGomeHome());
+        mBtnRTH.setOnClickListener(v -> mModel.doReturnToLaunch());
 
-        // Report button
-        Button mBtnRepport = findViewById(R.id.btn_Report);
-        mBtnRepport.setOnClickListener(v -> pluginManager.startPlugin("com.example.sendmail",1));
-
-        /*
-        StateListDrawable listDrawable = new StateListDrawable();
-        listDrawable.addState(new int[] {android.R.attr.state_pressed},  mBtnRepport.getBackground());
-        listDrawable.addState(new int[] {android.R.attr.defaultValue}, mBtnRepport.setBackground("@mipmap/track_report");
-        mBtnRepport.setBackground(listDrawable);
-        */
-
-        // AI button
-        Button mBtnAI = findViewById(R.id.btn_AI_start);
-        mBtnAI.setOnClickListener(v -> pluginManager.setAIMode());
-
-        // Click on SafeMode button (enable SafeMode)
-        Handler mTimerHandler = new Handler(Looper.getMainLooper());
-        mTimerHandler.postDelayed(enableSafeMode, 3000);
+        pluginManager.start();
 
         if(RDApplication.isTestMode) {
+            setSafeMode(false);
             mModel.mMotorsArmed = true;
             onDroneConnected();
+
+        } else {
+            setSafeMode(true);
         }
     }
 
-    private Runnable enableSafeMode = new Runnable() {
-        @Override
-        public void run() {
-            mBtnSafety.callOnClick();
+    private void setSafeMode(boolean enabled) {
+        Drawable connectedDrawable;
+        if (enabled) {
+            connectedDrawable = getResources().getDrawable(R.drawable.ic_lock_outline_secondary_24dp, null);
+            mBtnSafety.setBackground(connectedDrawable);
+            findViewById(R.id.btn_takeoff).setVisibility(View.INVISIBLE);
+        } else {
+            connectedDrawable = getResources().getDrawable(R.drawable.ic_lock_open_black_24dp, null);
+            mBtnSafety.setBackground(connectedDrawable);
+            findViewById(R.id.btn_takeoff).setVisibility(View.VISIBLE);
         }
-    };
+
+        mModel.setSafetyEnabled(enabled);
+    }
 
     @Override
     protected void onNewIntent(@NonNull Intent intent) {
@@ -866,7 +840,6 @@ public class MainActivity extends AppCompatActivity implements OnMapReadyCallbac
     private void notifyStatusChange() {
         mDJIHandler.removeCallbacks(djiUpdateRunnable);
         mDJIHandler.postDelayed(djiUpdateRunnable, 500);
-        mProduct = RDApplication.getProductInstance();
 
         if (mProduct != null && mProduct.isConnected() && mProduct.getModel() != null) {
             logMessageDJI(mProduct.getModel().name() + " Connected ");
@@ -884,6 +857,10 @@ public class MainActivity extends AppCompatActivity implements OnMapReadyCallbac
                 if (mCodecManager != null) {
                     // Render on screen
                     mCodecManager.sendDataToDecoder(videoBuffer, size);
+                    if (mPrevVideoBufferSize != size && videostreamPreviewTtView.getSurfaceTexture() != null) {
+                        mPrevVideoBufferSize = size;
+                        mSurfaceTextureListener.onSurfaceTextureSizeChanged(videostreamPreviewTtView.getSurfaceTexture(), videostreamPreviewTtView.getWidth(), videostreamPreviewTtView.getHeight());
+                    }
                 }
 
             } else {
@@ -971,6 +948,7 @@ public class MainActivity extends AppCompatActivity implements OnMapReadyCallbac
             case PHANTOM_4:         // https://github.com/The1only/rosettadrone/issues/61
             case MAVIC_MINI:        // Confirmed
             case DJI_MINI_SE:       // Confirmed
+            case DJI_MINI_2:
             case DJI_AIR_2S:        // To be confirmed
             case MAVIC_PRO:
             case INSPIRE_1:
@@ -996,32 +974,43 @@ public class MainActivity extends AppCompatActivity implements OnMapReadyCallbac
     private TextureView.SurfaceTextureListener mSurfaceTextureListener = new TextureView.SurfaceTextureListener() {
         @Override
         public void onSurfaceTextureAvailable(SurfaceTexture surface, int width, int height) {
-            Log.d(TAG, "real onSurfaceTextureAvailable: width " + width + " height " + height);
-            if (compare_height == 1) {
-                height = ((int) TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, 86, getResources().getDisplayMetrics()));
-                width = ((int) TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, 164, getResources().getDisplayMetrics()));
-
-            }
-            videoViewWidth = width;
-            videoViewHeight = height;
-
-            Log.d(TAG, "real onSurfaceTextureAvailable: width " + videoViewWidth + " height " + videoViewHeight + " Mode: " + compare_height);
             if (mCodecManager == null) {
                 mCodecManager = new DJICodecManager(getApplicationContext(), surface, width, height);
                 pluginManager.onVideoChange();
-            } else {
-                if(useOutputSurface) {
-                    mCodecManager.changeOutputSurface(surface);
-                    mCodecManager.onSurfaceSizeChanged(width, height, 0);
-                }
             }
+
+            Log.d(TAG, "real onSurfaceTextureAvailable: width " + width + " height " + height);
+
+            onSurfaceTextureSizeChanged(surface, width, height);
         }
 
         @Override
         public void onSurfaceTextureSizeChanged(SurfaceTexture surface, int width, int height) {
-            videoViewWidth = width;
-            videoViewHeight = height;
-            Log.d(TAG, "real onSurfaceTextureAvailable2: width " + videoViewWidth + " height " + videoViewHeight);
+            double aspectRatio = (double) mCodecManager.getVideoHeight() / mCodecManager.getVideoWidth();
+            int newWidth, newHeight;
+            if (height > (int) (width * aspectRatio)) {
+                newWidth = width;
+                newHeight = (int) (width * aspectRatio);
+            } else {
+                newWidth = (int) (height / aspectRatio);
+                newHeight = height;
+            }
+            int xOffset = (width - newWidth) / 2;
+            int yOffset = (height - newHeight) / 2;
+
+            Matrix transform = new Matrix();
+            TextureView textureView = videostreamPreviewTtView;
+            textureView.getTransform(transform);
+            transform.setScale((float) newWidth / width, (float) newHeight / height);
+            transform.postTranslate(xOffset, yOffset);
+            textureView.setTransform(transform);
+
+            Log.d(TAG, "real onSurfaceTextureAvailable2: width " + width + " height " + height);
+
+            if (useOutputSurface) {
+                mCodecManager.changeOutputSurface(surface);
+                mCodecManager.onSurfaceSizeChanged(width, height, 0);
+            }
         }
 
         @Override
@@ -1056,7 +1045,8 @@ public class MainActivity extends AppCompatActivity implements OnMapReadyCallbac
 
         @Override
         public void onProductConnect(BaseProduct newProduct) {
-            mProduct = newProduct;
+            // Keep same product (real drone or dummy) selected in the ConnectionActivity
+            //mProduct = newProduct;
 
             if (mProduct == null) {
                 logMessageDJI("No DJI drone detected");
@@ -1075,7 +1065,8 @@ public class MainActivity extends AppCompatActivity implements OnMapReadyCallbac
 
         @Override
         public void onProductChanged(BaseProduct baseProduct) {
-            mProduct = baseProduct;
+            // Keep same product (real drone or dummy) selected in the ConnectionActivity
+            //mProduct = baseProduct;
 
             if (mProduct == null) {
                 logMessageDJI("No DJI drone detected");
@@ -1158,7 +1149,7 @@ public class MainActivity extends AppCompatActivity implements OnMapReadyCallbac
             final int BUF_LEN = 2048;
             byte[] buffer = new byte[BUF_LEN];
 
-            String zipName = "RD_LOG_" + android.text.format.DateFormat.format("yyyy-MM-dd-hh:mm:ss", new java.util.Date());
+            String zipName = "RD_LOG_" + DateFormat.format("yyyy-MM-dd-hh:mm:ss", new Date());
             String[] fileNames = {"DJI_LOG", "OUTBOUND_LOG", "INBOUND_LOG"};
 
             File directory = new File(Environment.getExternalStorageDirectory().getPath()
@@ -1317,74 +1308,53 @@ public class MainActivity extends AppCompatActivity implements OnMapReadyCallbac
             case R.id.action_gui:
                 onClickGUI();
                 break;
-            case R.id.action_AI:
-                Uri notification = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM);
-                Ringtone r = RingtoneManager.getRingtone(getApplicationContext(), notification);
-                pluginManager.startActivity("com.example.remoteconfig4");
-                break;
             default:
-                return false;
+                return this.pluginManager.onMenuItemClick(item.getItemId());
         }
         return true;
     }
 
     public void onSmallMapClick(View v) {
-
         LinearLayout map_layout = findViewById(R.id.map_view);
-        FrameLayout video_layout_small = findViewById(R.id.fragment_container_small);
-        ViewGroup.LayoutParams map_para = map_layout.getLayoutParams();
+        FrameLayout video_layout = findViewById(R.id.fragment_container);
 
-        if (compare_height == 0) {
-            logMessageDJI("Set Small screen...");
-            videostreamPreviewTtView.clearFocus();
-            videostreamPreviewTtView.setVisibility(View.GONE);
-
-            //    safeSleep(200);
-            videostreamPreviewTtViewSmall.setSurfaceTextureListener(mSurfaceTextureListener);
-            videostreamPreviewTtViewSmall.setVisibility(View.VISIBLE);
-            video_layout_small.setZ(100.f);
-
-            // MAP ok...
-            map_layout.setZ(0.f);
-            map_para.height = LayoutParams.WRAP_CONTENT;
-            map_para.width = LayoutParams.WRAP_CONTENT;
-            map_layout.setLayoutParams(map_para);
-
-            changeOutputSurface(videostreamPreviewTtViewSmall);
-
-            compare_height = 1;
-
-        } else {
-            logMessageDJI("Set Main screen...");
-            videostreamPreviewTtViewSmall.clearFocus();
-            videostreamPreviewTtViewSmall.setVisibility(View.GONE);
-
-            //safeSleep(200);
-            videostreamPreviewTtView.setSurfaceTextureListener(mSurfaceTextureListener);
-            videostreamPreviewTtView.setVisibility(View.VISIBLE);
-            video_layout_small.setZ(0.f);
-
-            // MAP OK...
-            map_layout.setZ(100.f);
-            map_para.height = ((int) TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, 86, getResources().getDisplayMetrics()));
-            map_para.width = ((int) TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, 164, getResources().getDisplayMetrics()));
-            map_layout.setLayoutParams(map_para);
-            map_layout.setBottom(((int) TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, 10, getResources().getDisplayMetrics())));
-            map_layout.setLeft(((int) TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, 5, getResources().getDisplayMetrics())));
-
-            changeOutputSurface(videostreamPreviewTtView);
-
-            compare_height = 0;
+        ViewGroup focusedLayout;
+        ViewGroup previewLayout;
+        switch (focusedView) {
+            case Map: {
+                focusedLayout = map_layout;
+                previewLayout = video_layout;
+                focusedView = FocusedView.VideoFeed;
+                break;
+            }
+            case VideoFeed:
+            default: {
+                focusedLayout = video_layout;
+                previewLayout = map_layout;
+                focusedView = FocusedView.Map;
+                break;
+            }
         }
+
+        logMessageDJI("Swap the map and the video feed...");
+
+        int previewWidth = previewLayout.getWidth();
+        int previewHeight = previewLayout.getHeight();
+
+        LayoutParams focusedLayoutParams = focusedLayout.getLayoutParams();
+        focusedLayoutParams.width = previewWidth;
+        focusedLayoutParams.height = previewHeight;
+        focusedLayout.setLayoutParams(focusedLayoutParams);
+        focusedLayout.setZ(100.f);
+
+        LayoutParams previewLayoutParams = previewLayout.getLayoutParams();
+        previewLayoutParams.height = LayoutParams.WRAP_CONTENT;
+        previewLayoutParams.width = LayoutParams.WRAP_CONTENT;
+        previewLayout.setLayoutParams(previewLayoutParams);
+        previewLayout.setZ(0.f);
+
         v.setZ(101.f);
         //updateDroneLocation();
-    }
-
-    void changeOutputSurface(TextureView textureView) {
-        if (mCodecManager != null && useOutputSurface) {
-            mCodecManager.changeOutputSurface(textureView.getSurfaceTexture());
-            mCodecManager.onSurfaceSizeChanged(textureView.getWidth(), textureView.getHeight(), 0);
-        }
     }
 
     // Hmm is this ever called...
@@ -1454,7 +1424,6 @@ public class MainActivity extends AppCompatActivity implements OnMapReadyCallbac
     }
 
     private void onDroneConnected() {
-
         if (mProduct.getModel() == null) {
             logMessageDJI("Aircraft is not on!");
             return;
@@ -1629,19 +1598,6 @@ public class MainActivity extends AppCompatActivity implements OnMapReadyCallbac
             mModel.setMaxHeight(Integer.parseInt(Objects.requireNonNull(prefs.getString("pref_drone_max_height", "500"))));
             FLAG_DRONE_MAX_HEIGHT_CHANGED = false;
         }
-        if(FLAG_DRONE_AI_IP_CHANGED) {
-            mModel.setAiIP(prefs.getString("pref_ai_ip", "127.0.0.1"));
-            FLAG_DRONE_AI_IP_CHANGED = false;
-        }
-        if(FLAG_DRONE_AI_PORT_CHANGED) {
-            mModel.setAiPort(Integer.parseInt(Objects.requireNonNull(prefs.getString("pref_ai_port", "2000"))));
-            FLAG_DRONE_AI_PORT_CHANGED = false;
-
-        }
-        if(FLAG_DRONE_AI_ENABLED_CHANGED) {
-            mModel.setAIenable(prefs.getBoolean("pref_ai_telemetry_enabled", true));
-            FLAG_DRONE_AI_ENABLED_CHANGED = false;
-        }
 
         if (FLAG_DRONE_SMART_RTL_CHANGED) {
             mModel.setSmartRTLEnabled(prefs.getBoolean("pref_drone_smart_rtl", true));
@@ -1679,6 +1635,9 @@ public class MainActivity extends AppCompatActivity implements OnMapReadyCallbac
             aMap.setMapType(mMaptype);
             FLAG_MAPS_CHANGED = false;
         }
+
+        pluginManager.settingsChanged();
+        changedSettings.clear();
     }
 
     //---------------------------------------------------------------------------------------
@@ -1840,7 +1799,7 @@ public class MainActivity extends AppCompatActivity implements OnMapReadyCallbac
                 timer.scheduleAtFixedRate(gcsSender, 0, 100);
 
                 for(MAVLinkConnection mavLinkConnection : mainActivityRef.mMavlinkReceiver.mavLinkConnections) {
-                    Listener listener = new MainActivity.GCSCommunicatorAsyncTask.Listener(mavLinkConnection, mainActivityRef);
+                    Listener listener = new Listener(mavLinkConnection, mainActivityRef);
                     mavLinkConnection.listen(listener);
                 }
 
@@ -1909,6 +1868,12 @@ public class MainActivity extends AppCompatActivity implements OnMapReadyCallbac
             if (mainActivityRef.prefs.getBoolean("pref_telemetry_3_enabled", false)) {
                 String host = mainActivityRef.prefs.getString("pref_telemetry_3_host", "");
                 int port = Integer.parseInt(Objects.requireNonNull(mainActivityRef.prefs.getString("pref_telemetry_3_port", "")));
+                mainActivityRef.mMavlinkReceiver.mavLinkConnections.add(new MAVLinkConnection(host, port));
+            }
+
+            if (mainActivityRef.prefs.getBoolean("pref_telemetry_4_enabled", false)) {
+                String host = mainActivityRef.prefs.getString("pref_telemetry_4_host", "");
+                int port = Integer.parseInt(Objects.requireNonNull(mainActivityRef.prefs.getString("pref_telemetry_4_port", "")));
                 mainActivityRef.mMavlinkReceiver.mavLinkConnections.add(new MAVLinkConnection(host, port));
             }
         }
